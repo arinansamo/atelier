@@ -1,0 +1,19 @@
+# 個人の設定
+root.txt
+
+# 同じフォルダを絵の置き場にした場合の保険
+wip/
+works/
+
+# 作業ファイル・画像（check が画像とみなす拡張子と揃えておく）
+*.clip
+*.cmc
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+*.psd
+*.tif
+*.tiff

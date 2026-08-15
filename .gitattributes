@@ -1,0 +1,7 @@
+# Windows 専用ツールのため、実行ファイル類は必ず CRLF で配る
+# （GitHub の Download ZIP もこの設定に従って生成される）
+* text=auto
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.md text
+LICENSE text
