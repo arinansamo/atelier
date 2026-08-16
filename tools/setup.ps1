@@ -5,20 +5,16 @@ $ErrorActionPreference = 'Stop'
 
 function Show-FolderDialog {
     param([string]$Default)
-    # オーナーを最前面にしておかないと、ダイアログがコンソールの裏に隠れることがある
-    $owner = New-Object System.Windows.Forms.Form
-    $owner.TopMost = $true
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = '絵を保存するフォルダを選んでください'
-    $dialog.SelectedPath = $Default
-    if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
-        return $dialog.SelectedPath
-    }
-    return $null
+    $picked = [Atelier.FolderPicker]::Pick('絵を保存するフォルダを選んでください', $Default)
+    return $picked
 }
 
 try {
-    Add-Type -AssemblyName System.Windows.Forms
+    # フォルダ選択の下回り（新方式 IFileDialog の COM 呼び出し）は FolderPicker.cs を参照。
+    # 実行時にその場でコンパイルされるため、追加インストールは不要
+    if (-not ('Atelier.FolderPicker' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'FolderPicker.cs')
+    }
 
     # バッチから渡されるパスを正規化する（末尾の \. や、引用符の混入を除く）
     $ToolDir = [System.IO.Path]::GetFullPath(($ToolDir -replace '"', ''))
@@ -40,13 +36,10 @@ try {
         return
     }
 
-    # フォルダ選択ダイアログは「新しいフォルダーの作成」→改名→即OK の操作で、
-    # 改名前の古いパスを返すことがある（Windows 側の既知の癖）。
-    # 存在しないパスを黙って作り直すと選んだつもりの場所とずれるため、ここで止める
+    # ダイアログの返り値でも無検証では信じない。実在しないパスならここで止める
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
         Write-Host '選ばれたフォルダが見つかりませんでした。'
-        Write-Host '（フォルダを作って名前を変えた直後に起きることがあります）'
-        Write-Host 'もう一度 setup.bat を実行して、先ほど作ったフォルダを選び直してください。'
+        Write-Host 'もう一度 setup.bat を実行して、選び直してください。'
         return
     }
 
