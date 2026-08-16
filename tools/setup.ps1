@@ -40,6 +40,16 @@ try {
         return
     }
 
+    # フォルダ選択ダイアログは「新しいフォルダーの作成」→改名→即OK の操作で、
+    # 改名前の古いパスを返すことがある（Windows 側の既知の癖）。
+    # 存在しないパスを黙って作り直すと選んだつもりの場所とずれるため、ここで止める
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        Write-Host '選ばれたフォルダが見つかりませんでした。'
+        Write-Host '（フォルダを作って名前を変えた直後に起きることがあります）'
+        Write-Host 'もう一度 setup.bat を実行して、先ほど作ったフォルダを選び直してください。'
+        return
+    }
+
     # root.txt に書く（パスに日本語が含まれても化けないよう UTF-8 BOM付き）
     $utf8Bom = New-Object System.Text.UTF8Encoding($true)
     [System.IO.File]::WriteAllText($rootFile, $root, $utf8Bom)
