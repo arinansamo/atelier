@@ -7,7 +7,15 @@
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
+# 偽の置き場は Windows の一時フォルダ（%TEMP%）の直下に作り、終了時に必ず消す。
+# 途中で例外が起きても消すよう、trap で後始末する
 $base = Join-Path $env:TEMP 'atelier-tests'
+trap {
+    Write-Output ('テストが途中で止まりました: ' + $_)
+    if (Test-Path -LiteralPath $base) { Remove-Item -LiteralPath $base -Recurse -Force }
+    Write-Output "一時フォルダを削除しました: $base"
+    exit 1
+}
 if (Test-Path -LiteralPath $base) { Remove-Item -LiteralPath $base -Recurse -Force }
 [void][System.IO.Directory]::CreateDirectory($base)
 
@@ -301,4 +309,8 @@ Assert (-not $out.Contains('名前が規則と違います')) 'check-live: organ
 # ---- 結果 ----
 Write-Output ''
 Write-Output "TOTAL FAILS: $script:fails"
+
+# 結果にかかわらず、偽の置き場は必ず消す
+Remove-Item -LiteralPath $base -Recurse -Force
+Write-Output "一時フォルダを削除しました: $base"
 exit $script:fails
