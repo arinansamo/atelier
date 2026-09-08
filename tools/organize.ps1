@@ -4,14 +4,14 @@ param([string]$ToolDir)
 $ErrorActionPreference = 'Stop'
 
 # works 配下のグループ階層を「親\子」の相対パスで列挙する。
-# 作品フォルダ（YYYYMMDD- で始まる、または .clip を直接持つもの）は除外する
+# 作品は今やファイル（YYYYMMDD-タイトル.clip）なので、フォルダは基本すべてグループ。
+# 名前が YYYYMMDD- で始まるフォルダだけは紛らわしいため候補に出さない
 function Get-GenrePaths {
     param([string]$Dir, [string]$Prefix, [int]$Depth)
     $list = @()
     if ($Depth -ge 6) { return $list }
     foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory | Sort-Object Name)) {
         if ($d.Name -match '^\d{8}-.+$') { continue }
-        if (@(Get-ChildItem -LiteralPath $d.FullName -Filter *.clip -File).Count -gt 0) { continue }
         $rel = if ($Prefix -eq '') { $d.Name } else { "$Prefix\$($d.Name)" }
         $list += $rel
         $list += Get-GenrePaths -Dir $d.FullName -Prefix $rel -Depth ($Depth + 1)
@@ -212,7 +212,7 @@ try {
     }
 
     $plan = @()
-    $plannedDirs = @{}
+    $plannedFiles = @{}
     $skipped = 0
     $left = 0
 
@@ -254,42 +254,30 @@ try {
             continue
         }
         if (@($genreSegments | Where-Object { $_ -match '^\d{8}' }).Count -gt 0) {
-            Write-Host "  スキップ: $($clip.Name)（8桁の数字で始まるグループ名は作品フォルダと紛らわしいため使えません）"
+            Write-Host "  スキップ: $($clip.Name)（8桁の数字で始まるグループ名は作品の名前と紛らわしいため使えません）"
             $skipped++
             continue
         }
         $genre = $genreSegments -join '\'
 
-        # 行き先の途中に .clip を直接持つフォルダ（＝作品フォルダ）があれば、その中には作らない
-        $probe = $worksDir
-        $hitWork = $null
-        foreach ($seg in $genreSegments) {
-            $probe = Join-Path $probe $seg
-            if (-not (Test-Path -LiteralPath $probe -PathType Container)) { break }
-            if (@(Get-ChildItem -LiteralPath $probe -Filter *.clip -File).Count -gt 0) { $hitWork = $seg; break }
-        }
-        if ($hitWork) {
-            Write-Host "  スキップ: $($clip.Name)（「$hitWork」は作品フォルダです。その中には整理できません）"
-            $skipped++
-            continue
-        }
-
+        # 作品はフォルダを挟まず、指定されたグループに「YYYYMMDD-タイトル.clip」として直接置く
         $date = $clip.LastWriteTime
-        $folderName = $date.ToString('yyyyMMdd') + '-' + $title
-        $relDir = 'works\{0}\{1}' -f $genre, $folderName
+        $workName = $date.ToString('yyyyMMdd') + '-' + $title
+        $relDir = "works\$genre"
         $destDir = Join-Path $root $relDir
+        $destFile = Join-Path $destDir "$workName.clip"
 
-        if (Test-Path -LiteralPath $destDir) {
-            Write-Host "  スキップ: $($clip.Name)（移動先の $folderName フォルダが既にあります）"
+        if (Test-Path -LiteralPath $destFile) {
+            Write-Host "  スキップ: $($clip.Name)（同じ名前の作品 $workName.clip が既にあります）"
             $skipped++
             continue
         }
-        if ($plannedDirs.ContainsKey($destDir)) {
+        if ($plannedFiles.ContainsKey($destFile)) {
             Write-Host "  スキップ: $($clip.Name)（同じ日付・タイトルのものがこの中にもうあります）"
             $skipped++
             continue
         }
-        $plannedDirs[$destDir] = $true
+        $plannedFiles[$destFile] = $true
 
         # 動かすのは .clip だけ。画像などの他のファイルには一切触れない
         $plan += [pscustomobject]@{
@@ -297,8 +285,8 @@ try {
             Genre   = $genre
             DestDir = $destDir
             Source  = $clip.FullName
-            DestRel = "$relDir\$folderName.clip"
-            Dest    = Join-Path $destDir "$folderName.clip"
+            DestRel = "$relDir\$workName.clip"
+            Dest    = $destFile
         }
     }
 

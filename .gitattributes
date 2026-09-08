@@ -4,5 +4,8 @@
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.cs text eol=crlf
+
+# テストは開発用。Download ZIP（git archive）には含めない
+tests/ export-ignore
 *.md text
 LICENSE text

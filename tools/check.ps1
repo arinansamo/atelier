@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $findings = New-Object 'System.Collections.Generic.List[object]'
 $imageExts = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.psd', '.tif', '.tiff')
+$ignoreNames = @('desktop.ini', 'thumbs.db')
 $workNames = @{}
 
 function Add-Finding {
@@ -13,121 +14,89 @@ function Add-Finding {
     $findings.Add([pscustomobject]@{ Category = $Category; Name = $Name })
 }
 
-# works 配下を再帰的に歩く。YYYYMMDD- で始まるフォルダは作品として検査し、
-# それ以外はグループとして中に潜る。ただし .clip を直接持つものは
-# 「名前が規則外の作品フォルダ」とみなして報告する
-function Invoke-GenreScan {
+# works 配下を再帰的に歩く。フォルダはすべてグループ。
+# 作品は「YYYYMMDD-タイトル」の名前を持つ .clip ファイルと、その同名画像のひと組
+function Invoke-GroupScan {
     param([string]$Dir, [string]$Rel, [int]$Depth)
 
-    # グループの階層に直接置かれた .clip・画像は迷子。作品フォルダに入っていないのは無条件におかしい。
-    # それ以外のファイル（メモ等）は意図的かもしれないので厳密モードのみ。
-    # Windows が勝手に作る desktop.ini 等は無視する
-    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -File | Sort-Object Name)) {
-        if (@('desktop.ini', 'thumbs.db') -contains $f.Name.ToLowerInvariant()) { continue }
-        $fileRel = if ($Rel -eq '') { "works\$($f.Name)" } else { "works\$Rel\$($f.Name)" }
-        $ext = $f.Extension.ToLower()
-        if ($ext -eq '.clip' -or $imageExts -contains $ext) {
-            Add-Finding '置き場所が違うファイル' $fileRel
+    $files = @(Get-ChildItem -LiteralPath $Dir -File | Sort-Object Name)
+    $clips = @($files | Where-Object { $_.Extension.ToLower() -eq '.clip' })
+    $images = @($files | Where-Object { $imageExts -contains $_.Extension.ToLower() })
+
+    # 同じ場所にある画像の名前→最新更新日時
+    $imageMap = @{}
+    foreach ($img in $images) {
+        $imgKey = $img.BaseName.ToLowerInvariant()
+        if (-not $imageMap.ContainsKey($imgKey) -or $img.LastWriteTime -gt $imageMap[$imgKey]) {
+            $imageMap[$imgKey] = $img.LastWriteTime
         }
-        elseif ($Strict) {
-            Add-Finding 'その他のファイル' $fileRel
+    }
+    $clipNames = @{}
+    foreach ($clip in $clips) { $clipNames[$clip.BaseName.ToLowerInvariant()] = $true }
+
+    foreach ($clip in $clips) {
+        $relName = if ($Rel -eq '') { $clip.Name } else { "$Rel\$($clip.Name)" }
+
+        # 名前: YYYYMMDD-タイトル（接尾辞は自由）。規則外は名前だけ指摘し、他の検査は名前を直した後に譲る
+        $workDate = [datetime]::MinValue
+        $nameOk = ($clip.BaseName -match '^(\d{8})-.+') -and
+            [datetime]::TryParseExact($Matches[1], 'yyyyMMdd',
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::None, [ref]$workDate)
+        if (-not $nameOk) {
+            Add-Finding '名前が規則と違います' $relName
+            continue
+        }
+
+        # 完成日が未来なのは打ち間違い以外にあり得ない
+        if ($workDate.Date -gt (Get-Date).Date) {
+            Add-Finding '日付が未来です' $relName
+        }
+
+        # 同名重複の検出用に記録する（報告は厳密モードのみ）
+        $dupKey = $clip.BaseName.ToLowerInvariant()
+        if (-not $workNames.ContainsKey($dupKey)) { $workNames[$dupKey] = @() }
+        $workNames[$dupKey] += $relName
+
+        # 書き出し忘れ: 同じ場所に「同じ名前で拡張子だけ違う画像」があるか（完全一致のみ）
+        $clipKey = $clip.BaseName.ToLowerInvariant()
+        if (-not $imageMap.ContainsKey($clipKey)) {
+            Add-Finding '書き出し忘れ' $relName
+        }
+        elseif ($Strict -and $clip.LastWriteTime -gt $imageMap[$clipKey]) {
+            # 画像より後に .clip が保存されている＝書き出し直し忘れの疑い
+            Add-Finding '書き出しが古いかもしれません' $relName
         }
     }
 
-    foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory | Sort-Object Name)) {
-        # 注意: PowerShell の変数名は大文字小文字を区別しないため、$Rel とは別名にする
-        $childRel = if ($Rel -eq '') { $d.Name } else { "$Rel\$($d.Name)" }
-
-        if ($d.Name -match '^(\d{8})-.+$') {
-            # 作品フォルダとして検査する
-            $dateText = $Matches[1]
-            $name = $d.Name
-
-            $workDate = [datetime]::MinValue
-            $dateOk = [datetime]::TryParseExact($dateText, 'yyyyMMdd',
-                [System.Globalization.CultureInfo]::InvariantCulture,
-                [System.Globalization.DateTimeStyles]::None, [ref]$workDate)
-            if (-not $dateOk) {
-                Add-Finding 'フォルダ名が規則と違います' "works\$childRel"
-                continue
-            }
-
-            # 完成日が未来なのは打ち間違い以外にあり得ない
-            if ($workDate.Date -gt (Get-Date).Date) {
-                Add-Finding '日付が未来です' "works\$childRel"
-            }
-
-            # 同名重複の検出用に記録する（報告は厳密モードのみ）
-            $dupKey = $name.ToLowerInvariant()
-            if (-not $workNames.ContainsKey($dupKey)) { $workNames[$dupKey] = @() }
-            $workNames[$dupKey] += $childRel
-
-            $clips = @(Get-ChildItem -LiteralPath $d.FullName -Filter *.clip -File)
-
-            # 原本の消失（最重要）: 作品フォルダに .clip が無い
-            if ($clips.Count -eq 0) {
-                Add-Finding '原本が見つかりません' $childRel
-            }
-            else {
-                # 書き出し忘れ: それぞれの .clip に「同じ名前で拡張子だけ違う画像」があるか。
-                # 判定は名前の完全一致のみ（本体も差分も同じ規則）。画像の更新日時も控えておく
-                $imageMap = @{}
-                foreach ($img in @(Get-ChildItem -LiteralPath $d.FullName -File |
-                    Where-Object { $imageExts -contains $_.Extension.ToLower() })) {
-                    $imgKey = $img.BaseName.ToLowerInvariant()
-                    if (-not $imageMap.ContainsKey($imgKey) -or $img.LastWriteTime -gt $imageMap[$imgKey]) {
-                        $imageMap[$imgKey] = $img.LastWriteTime
-                    }
-                }
-                foreach ($clip in $clips) {
-                    # 名前が規則外の clip は「ファイル名」検査に任せ、ここでは責めない
-                    if (-not $clip.BaseName.StartsWith($name, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-                    $clipKey = $clip.BaseName.ToLowerInvariant()
-                    if (-not $imageMap.ContainsKey($clipKey)) {
-                        Add-Finding '書き出し忘れ' "$childRel\$($clip.Name)"
-                    }
-                    elseif ($Strict -and $clip.LastWriteTime -gt $imageMap[$clipKey]) {
-                        # 画像より後に .clip が保存されている＝書き出し直し忘れの疑い
-                        Add-Finding '書き出しが古いかもしれません' "$childRel\$($clip.Name)"
-                    }
-                }
-            }
-
-            # .clip の名前がフォルダ名で始まっていれば差分・改訂版として正常
-            # （例: 20260801-ねこ-モザイク無し.clip / 20260801-ねこ_v2.clip）
-            foreach ($clip in $clips) {
-                if (-not $clip.BaseName.StartsWith($name, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    Add-Finding 'ファイル名がフォルダ名と違います' "$childRel\$($clip.Name)"
-                }
-            }
-
-            # 厳密モードのみ: 意図的かもしれないものの棚卸し
-            if ($Strict) {
-                # 作品フォルダの中のフォルダ（ラフ置き場・昔の名残など）
-                foreach ($sub in @(Get-ChildItem -LiteralPath $d.FullName -Directory | Sort-Object Name)) {
-                    Add-Finding '作品フォルダの中のフォルダ' "$childRel\$($sub.Name)\"
-                }
-                # .clip でも画像でもないファイル（メモ等）
-                foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -File | Sort-Object Name)) {
-                    $ext = $f.Extension.ToLower()
-                    if ($ext -eq '.clip' -or $imageExts -contains $ext) { continue }
-                    if (@('desktop.ini', 'thumbs.db') -contains $f.Name.ToLowerInvariant()) { continue }
-                    Add-Finding 'その他のファイル' "$childRel\$($f.Name)"
-                }
-            }
+    # 原本の消失（最重要）: 同じ名前の .clip がいない画像
+    foreach ($img in $images) {
+        if (-not $clipNames.ContainsKey($img.BaseName.ToLowerInvariant())) {
+            $relName = if ($Rel -eq '') { $img.Name } else { "$Rel\$($img.Name)" }
+            Add-Finding '原本が見つかりません' $relName
         }
-        else {
-            $looksLikeWork = @(Get-ChildItem -LiteralPath $d.FullName -Filter *.clip -File).Count -gt 0
-            if ($looksLikeWork) {
-                Add-Finding 'フォルダ名が規則と違います' "works\$childRel"
+    }
+
+    # 厳密モードのみ: .clip でも画像でもないファイルの棚卸し（メモ等、意図的な置き物のこともある）
+    if ($Strict) {
+        foreach ($f in $files) {
+            $ext = $f.Extension.ToLower()
+            if ($ext -eq '.clip' -or $imageExts -contains $ext) { continue }
+            if ($ignoreNames -contains $f.Name.ToLowerInvariant()) { continue }
+            $relName = if ($Rel -eq '') { $f.Name } else { "$Rel\$($f.Name)" }
+            Add-Finding 'その他のファイル' $relName
+        }
+    }
+
+    # サブフォルダはすべてグループとして潜る
+    foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory | Sort-Object Name)) {
+        $childRel = if ($Rel -eq '') { $d.Name } else { "$Rel\$($d.Name)" }
+        if ($Depth -lt 6) {
+            # 厳密モードのみ: 中身のないグループフォルダを棚卸しする
+            if ($Strict -and @(Get-ChildItem -LiteralPath $d.FullName).Count -eq 0) {
+                Add-Finding '空のグループフォルダ' "works\$childRel"
             }
-            elseif ($Depth -lt 6) {
-                # 厳密モードのみ: 中身のないグループフォルダを棚卸しする
-                if ($Strict -and @(Get-ChildItem -LiteralPath $d.FullName).Count -eq 0) {
-                    Add-Finding '空のグループフォルダ' "works\$childRel"
-                }
-                Invoke-GenreScan -Dir $d.FullName -Rel $childRel -Depth ($Depth + 1)
-            }
+            Invoke-GroupScan -Dir $d.FullName -Rel $childRel -Depth ($Depth + 1)
         }
     }
 }
@@ -157,9 +126,9 @@ try {
     }
 
     if ($Strict) { Write-Host '厳密点検モードで調べます。' -ForegroundColor Cyan }
-    Invoke-GenreScan -Dir $worksDir -Rel '' -Depth 0
+    Invoke-GroupScan -Dir $worksDir -Rel '' -Depth 0
 
-    # 厳密モードのみ: 同じ作品フォルダ名が複数の場所にあれば棚卸しする
+    # 厳密モードのみ: 同じ名前の作品が複数の場所にあれば棚卸しする
     if ($Strict) {
         foreach ($entry in ($workNames.GetEnumerator() | Sort-Object Key)) {
             if (@($entry.Value).Count -gt 1) {
@@ -179,21 +148,15 @@ try {
     Write-Host "$($findings.Count)件の問題が見つかりました。" -ForegroundColor Yellow
     $order = @(
         [pscustomobject]@{ Cat = '原本が見つかりません'
-            Desc = '作品フォルダに .clip がありません。削除された可能性があります。'; Color = 'Red' }
+            Desc = '画像はあるのに、同じ名前の .clip がありません。原本が消えた可能性があります。'; Color = 'Red' }
         [pscustomobject]@{ Cat = '書き出し忘れ'
-            Desc = '.clip と同じ名前の画像がありません。書き出して同じフォルダに入れてください。'; Color = 'Yellow' }
+            Desc = '.clip と同じ名前の画像がありません。書き出して同じ場所に入れてください。'; Color = 'Yellow' }
         [pscustomobject]@{ Cat = '日付が未来です'
-            Desc = 'フォルダ名の完成日が未来です。打ち間違いかもしれません。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = 'フォルダ名が規則と違います'
-            Desc = '「YYYYMMDD-タイトル」の形に直してください。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = 'ファイル名がフォルダ名と違います'
-            Desc = '名前を「フォルダ名」か「フォルダ名＋接尾辞」にしてください。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = '置き場所が違うファイル'
-            Desc = 'グループの階層に .clip や画像が直接置かれています。作品フォルダの中へ移してください。'; Color = 'Yellow' }
+            Desc = '名前の完成日が未来です。打ち間違いかもしれません。'; Color = 'Yellow' }
+        [pscustomobject]@{ Cat = '名前が規則と違います'
+            Desc = '「YYYYMMDD-タイトル」で始まる名前にしてください。'; Color = 'Yellow' }
         [pscustomobject]@{ Cat = '書き出しが古いかもしれません'
             Desc = '.clip が画像より後に更新されています。書き出し直しを忘れていないか確認してください。'; Color = 'Cyan' }
-        [pscustomobject]@{ Cat = '作品フォルダの中のフォルダ'
-            Desc = '意図して置いたものなら、そのままで構いません。'; Color = 'Cyan' }
         [pscustomobject]@{ Cat = '空のグループフォルダ'
             Desc = '中身がありません。使っていなければ消しても構いません。'; Color = 'Cyan' }
         [pscustomobject]@{ Cat = '同じ名前の作品が複数あります'
