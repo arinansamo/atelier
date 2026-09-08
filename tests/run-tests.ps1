@@ -243,15 +243,14 @@ New-TestFile (Join-Path $checkRoot 'works\版権\ゆめアニメ\20260505-かこ
 New-TestFile (Join-Path $checkRoot 'works\版権\ゆめアニメ\20260815-夏の絵.clip')
 # 原本消失（相方のいない画像）
 New-TestFile (Join-Path $checkRoot 'works\版権\20260702-べつのやつ.png')
-# 名前規則: 日付なし / 読めない日付
-New-TestFile (Join-Path $checkRoot 'works\版権\なまえだけ.clip')
-New-TestFile (Join-Path $checkRoot 'works\オリジナル\20269999-むり.clip')
+# 名前が規則外の clip: 名前を指摘し、かつ画像の有無も名前に関係なく見る（両方挙がる）
+New-TestFile (Join-Path $checkRoot 'works\版権\なまえだけ.clip')                # 日付なし・画像なし → 名前＋書き出し忘れ
+New-TestFile (Join-Path $checkRoot 'works\オリジナル\20269999-むり.clip')      # 日付が読めない・画像なし → 名前＋書き出し忘れ
+New-TestFile (Join-Path $checkRoot 'works\OC\Anon\Anon.clip')                  # 日付なし・画像あり → 名前だけ
+New-TestFile (Join-Path $checkRoot 'works\OC\Anon\Anon.png')
 # 日付が未来
 New-TestFile (Join-Path $checkRoot 'works\オリジナル\20991231-みらい.clip')
 New-TestFile (Join-Path $checkRoot 'works\オリジナル\20991231-みらい.png')
-# 書き出しが古い（厳密のみ）
-New-TestFile (Join-Path $checkRoot 'works\オリジナル\20260606-ふるで.clip') ([datetime]'2026-06-07 12:00')
-New-TestFile (Join-Path $checkRoot 'works\オリジナル\20260606-ふるで.png') ([datetime]'2026-06-06 12:00')
 # 空のグループ（厳密のみ）
 [void][System.IO.Directory]::CreateDirectory((Join-Path $checkRoot 'works\そざい'))
 # 同名重複（厳密のみ）
@@ -266,20 +265,23 @@ New-TestFile (Join-Path $checkRoot 'works\desktop.ini')
 [void][System.IO.Directory]::CreateDirectory((Join-Path $checkRoot 'wip'))
 
 $out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool 6>&1 | Out-String)
-Assert ($out.Contains('5件の問題が見つかりました')) 'check: total count is 5'
+Assert ($out.Contains('8件の問題が見つかりました')) 'check: total count is 8'
 Assert ($out.Contains('[原本が見つかりません]') -and $out.Contains('版権\20260702-べつのやつ.png')) 'check: image without clip flagged'
 Assert ($out.Contains('[書き出し忘れ]') -and $out.Contains('ゆめアニメ\20260815-夏の絵.clip')) 'check: clip without image flagged'
-Assert ($out.Contains('[名前が規則と違います]') -and $out.Contains('版権\なまえだけ.clip') -and $out.Contains('オリジナル\20269999-むり.clip')) 'check: undated and unparsable names flagged'
+Assert ($out.Contains('[名前が規則と違います]') -and $out.Contains('OC\Anon\Anon.clip') -and $out.Contains('版権\なまえだけ.clip') -and $out.Contains('オリジナル\20269999-むり.clip')) 'check: undated file names flagged'
+$missing = ($out -split '\[')[1..99] | Where-Object { $_ -like '書き出し忘れ*' }
+Assert ($missing -like '*なまえだけ.clip*' -and $missing -like '*むり.clip*') 'check: misnamed clips without image ALSO flagged as missing export'
+Assert (-not ($missing -like '*Anon.clip*')) 'check: misnamed clip with its image not flagged as missing export'
 Assert ($out.Contains('[日付が未来です]') -and $out.Contains('20991231-みらい.clip')) 'check: future date flagged'
 Assert (-not $out.Contains('かこ')) 'check: clean file-pair works not flagged'
-Assert (-not $out.Contains('ふるで')) 'check: stale export silent in normal mode'
 Assert (-not $out.Contains('だぶり')) 'check: duplicates silent in normal mode'
 Assert (-not $out.Contains('めも.txt')) 'check: extra files silent in normal mode'
 Assert (-not $out.Contains('desktop.ini')) 'check: windows droppings ignored'
 
 $out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool -Strict 6>&1 | Out-String)
-Assert ($out.Contains('11件の問題が見つかりました')) 'check-strict: total count is 11'
-Assert ($out.Contains('[書き出しが古いかもしれません]') -and $out.Contains('20260606-ふるで.clip')) 'check-strict: stale export flagged'
+Assert ($out.Contains('13件の問題が見つかりました')) 'check-strict: normal 8 plus 5 inventory items'
+Assert ($out.Contains('[書き出し忘れ]') -and $out.Contains('[名前が規則と違います]') -and $out.Contains('[原本が見つかりません]')) 'check-strict: normal findings included'
+Assert (-not $out.Contains('古いかも')) 'check-strict: no stale-export check exists'
 Assert ($out.Contains('[空のグループフォルダ]') -and $out.Contains('works\そざい')) 'check-strict: empty group listed'
 Assert ($out.Contains('[同じ名前の作品が複数あります]') -and $out.Contains('オリジナル\20260303-だぶり.clip') -and $out.Contains('版権\20260303-だぶり.clip')) 'check-strict: duplicate names listed'
 Assert ($out.Contains('[その他のファイル]') -and $out.Contains('よみもの.txt') -and $out.Contains('ゆめアニメ\めも.txt')) 'check-strict: extra files listed'

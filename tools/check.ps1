@@ -23,21 +23,16 @@ function Invoke-GroupScan {
     $clips = @($files | Where-Object { $_.Extension.ToLower() -eq '.clip' })
     $images = @($files | Where-Object { $imageExts -contains $_.Extension.ToLower() })
 
-    # 同じ場所にある画像の名前→最新更新日時
-    $imageMap = @{}
-    foreach ($img in $images) {
-        $imgKey = $img.BaseName.ToLowerInvariant()
-        if (-not $imageMap.ContainsKey($imgKey) -or $img.LastWriteTime -gt $imageMap[$imgKey]) {
-            $imageMap[$imgKey] = $img.LastWriteTime
-        }
-    }
+    # 同じ場所にある画像の名前
+    $imageNames = @{}
+    foreach ($img in $images) { $imageNames[$img.BaseName.ToLowerInvariant()] = $true }
     $clipNames = @{}
     foreach ($clip in $clips) { $clipNames[$clip.BaseName.ToLowerInvariant()] = $true }
 
     foreach ($clip in $clips) {
         $relName = if ($Rel -eq '') { $clip.Name } else { "$Rel\$($clip.Name)" }
 
-        # 名前: YYYYMMDD-タイトル（接尾辞は自由）。規則外は名前だけ指摘し、他の検査は名前を直した後に譲る
+        # 名前が YYYYMMDD- で始まるかは行儀の問題。画像の有無とは独立に扱う
         $workDate = [datetime]::MinValue
         $nameOk = ($clip.BaseName -match '^(\d{8})-.+') -and
             [datetime]::TryParseExact($Matches[1], 'yyyyMMdd',
@@ -45,11 +40,9 @@ function Invoke-GroupScan {
                 [System.Globalization.DateTimeStyles]::None, [ref]$workDate)
         if (-not $nameOk) {
             Add-Finding '名前が規則と違います' $relName
-            continue
         }
-
-        # 完成日が未来なのは打ち間違い以外にあり得ない
-        if ($workDate.Date -gt (Get-Date).Date) {
+        elseif ($workDate.Date -gt (Get-Date).Date) {
+            # 完成日が未来なのは打ち間違い以外にあり得ない
             Add-Finding '日付が未来です' $relName
         }
 
@@ -58,14 +51,10 @@ function Invoke-GroupScan {
         if (-not $workNames.ContainsKey($dupKey)) { $workNames[$dupKey] = @() }
         $workNames[$dupKey] += $relName
 
-        # 書き出し忘れ: 同じ場所に「同じ名前で拡張子だけ違う画像」があるか（完全一致のみ）
-        $clipKey = $clip.BaseName.ToLowerInvariant()
-        if (-not $imageMap.ContainsKey($clipKey)) {
+        # 書き出し忘れ: 同じ場所に「同じ名前で拡張子だけ違う画像」があるか（完全一致のみ）。
+        # 名前の行儀に関係なく、すべての .clip に適用する
+        if (-not $imageNames.ContainsKey($clip.BaseName.ToLowerInvariant())) {
             Add-Finding '書き出し忘れ' $relName
-        }
-        elseif ($Strict -and $clip.LastWriteTime -gt $imageMap[$clipKey]) {
-            # 画像より後に .clip が保存されている＝書き出し直し忘れの疑い
-            Add-Finding '書き出しが古いかもしれません' $relName
         }
     }
 
@@ -139,33 +128,35 @@ try {
         }
     }
 
-    if ($findings.Count -eq 0) {
+    # 通常モードは「直すべきもの」を出す。厳密モードはそれに加えて「参考情報」も出す
+    $order = @(
+        [pscustomobject]@{ Cat = '原本が見つかりません'; Strict = $false
+            Desc = '画像はあるのに、同じ名前の .clip がありません。原本が消えた可能性があります。'; Color = 'Red' }
+        [pscustomobject]@{ Cat = '書き出し忘れ'; Strict = $false
+            Desc = '.clip と同じ名前の画像がありません。書き出して同じ場所に入れてください。'; Color = 'Yellow' }
+        [pscustomobject]@{ Cat = '日付が未来です'; Strict = $false
+            Desc = '名前の完成日が未来です。打ち間違いかもしれません。'; Color = 'Yellow' }
+        [pscustomobject]@{ Cat = '名前が規則と違います'; Strict = $false
+            Desc = 'この .clip のファイル名を「YYYYMMDD-タイトル」で始まる形にしてください（フォルダ名は自由です）。'; Color = 'Yellow' }
+        [pscustomobject]@{ Cat = '空のグループフォルダ'; Strict = $true
+            Desc = '中身がありません。使っていなければ消しても構いません。'; Color = 'Cyan' }
+        [pscustomobject]@{ Cat = '同じ名前の作品が複数あります'; Strict = $true
+            Desc = 'コピーの置き忘れかもしれません。中身を見比べてください。'; Color = 'Cyan' }
+        [pscustomobject]@{ Cat = 'その他のファイル'; Strict = $true
+            Desc = '.clip でも画像でもないファイルです。意図して置いたものなら、そのままで構いません。'; Color = 'Cyan' }
+    )
+    $shown = @($order | Where-Object { (-not $_.Strict) -or $Strict })
+    $visible = @($findings | Where-Object { $cat = $_.Category; @($shown | Where-Object { $_.Cat -eq $cat }).Count -gt 0 })
+
+    if ($visible.Count -eq 0) {
         Write-Host '問題は見つかりませんでした。' -ForegroundColor Green
         return
     }
 
     # 説明はカテゴリごとに1回だけ表示し、その下に対象を素の一覧で並べる
-    Write-Host "$($findings.Count)件の問題が見つかりました。" -ForegroundColor Yellow
-    $order = @(
-        [pscustomobject]@{ Cat = '原本が見つかりません'
-            Desc = '画像はあるのに、同じ名前の .clip がありません。原本が消えた可能性があります。'; Color = 'Red' }
-        [pscustomobject]@{ Cat = '書き出し忘れ'
-            Desc = '.clip と同じ名前の画像がありません。書き出して同じ場所に入れてください。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = '日付が未来です'
-            Desc = '名前の完成日が未来です。打ち間違いかもしれません。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = '名前が規則と違います'
-            Desc = '「YYYYMMDD-タイトル」で始まる名前にしてください。'; Color = 'Yellow' }
-        [pscustomobject]@{ Cat = '書き出しが古いかもしれません'
-            Desc = '.clip が画像より後に更新されています。書き出し直しを忘れていないか確認してください。'; Color = 'Cyan' }
-        [pscustomobject]@{ Cat = '空のグループフォルダ'
-            Desc = '中身がありません。使っていなければ消しても構いません。'; Color = 'Cyan' }
-        [pscustomobject]@{ Cat = '同じ名前の作品が複数あります'
-            Desc = 'コピーの置き忘れかもしれません。中身を見比べてください。'; Color = 'Cyan' }
-        [pscustomobject]@{ Cat = 'その他のファイル'
-            Desc = '.clip でも画像でもないファイルです。意図して置いたものなら、そのままで構いません。'; Color = 'Cyan' }
-    )
-    foreach ($cat in $order) {
-        $items = @($findings | Where-Object { $_.Category -eq $cat.Cat })
+    Write-Host "$($visible.Count)件の問題が見つかりました。" -ForegroundColor Yellow
+    foreach ($cat in $shown) {
+        $items = @($visible | Where-Object { $_.Category -eq $cat.Cat })
         if ($items.Count -eq 0) { continue }
         Write-Host ''
         Write-Host "[$($cat.Cat)]" -ForegroundColor $cat.Color -NoNewline
