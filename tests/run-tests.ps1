@@ -66,7 +66,8 @@ if ($env:ATELIER_TEST_CANCEL -eq '1') { return $null }
     }
 '@
 $anchor2 = '$result = [System.Windows.Forms.MessageBox]::Show($owner, $Message, ''atelier'', ''YesNo'', ''Question'')'
-$patch2 = '$result = $env:ATELIER_TEST_CONFIRM'
+# 確認ダイアログの差し替え。ATELIER_TEST_RACE_FILE が指定されていれば「確認中に同名ファイルが生まれた」競合を再現する
+$patch2 = 'if ($env:ATELIER_TEST_RACE_FILE) { [System.IO.File]::WriteAllText($env:ATELIER_TEST_RACE_FILE, ''RACE-ORIGINAL'') }; $result = $env:ATELIER_TEST_CONFIRM'
 Assert ($t.Contains($anchor1)) 'patch anchor: organize grid dialog'
 Assert ($t.Contains($anchor2)) 'patch anchor: organize confirm'
 [System.IO.File]::WriteAllText((Join-Path $toolDir 'organize.ps1'), $t.Replace($anchor1, $patch1).Replace($anchor2, $patch2), $utf8Bom)
@@ -150,12 +151,29 @@ $out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
 Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\版権\つき\20260806-mmm.clip')) 'organize: fullwidth separator normalized'
 
 # ---- 4. organize: スキップ各種 ----
+# ① 行き先に同名の作品が既にある → その件はスキップ、既存の中身は無傷
+$existing = Join-Path $rootDir 'works\版権\ゆめアニメ\20260801-夏の絵.clip'
+[System.IO.File]::WriteAllText($existing, 'KEEP-ME')
 New-TestFile (Join-Path $wipDir 'eee.clip') ([datetime]'2026-08-01 11:00')
 $env:ATELIER_TEST_GRID = '夏の絵|版権\ゆめアニメ'
 $out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $wipDir 'eee.clip')) 'organize: same-name work stays in wip'
-Assert ($out.Contains('既にあります')) 'organize: same-name skip message'
+Assert (Test-Path -LiteralPath (Join-Path $wipDir 'eee.clip')) 'collision-1: same-name work stays in wip'
+Assert ($out.Contains('既にあります')) 'collision-1: same-name skip message'
+Assert ([System.IO.File]::ReadAllText($existing) -eq 'KEEP-ME') 'collision-1: existing file content untouched'
 Remove-Item -LiteralPath (Join-Path $wipDir 'eee.clip') -Force
+
+# ③ 確認ダイアログの間に同名ファイルが生まれた（競合）→ 上書きせず失敗として報告、元は wip に残る
+New-TestFile (Join-Path $wipDir 'www.clip') ([datetime]'2026-08-09 10:00')
+$raceFile = Join-Path $rootDir 'works\らくがき\20260809-www.clip'
+$env:ATELIER_TEST_GRID = '~|らくがき'
+$env:ATELIER_TEST_RACE_FILE = $raceFile
+$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
+$env:ATELIER_TEST_RACE_FILE = ''
+Assert ($out.Contains('移動できませんでした')) 'collision-3: race reported as move failure'
+Assert (Test-Path -LiteralPath (Join-Path $wipDir 'www.clip')) 'collision-3: source stays in wip'
+Assert ([System.IO.File]::ReadAllText($raceFile) -eq 'RACE-ORIGINAL') 'collision-3: file that appeared during confirm not overwritten'
+Remove-Item -LiteralPath (Join-Path $wipDir 'www.clip') -Force
+Remove-Item -LiteralPath $raceFile -Force
 
 New-TestFile (Join-Path $wipDir 'fff.clip')
 $env:ATELIER_TEST_GRID = 'a:b|らくがき'
@@ -210,8 +228,9 @@ New-TestFile (Join-Path $wipDir 'iii.clip') ([datetime]'2026-08-02 10:00')
 New-TestFile (Join-Path $wipDir 'jjj.clip') ([datetime]'2026-08-02 11:00')
 $env:ATELIER_TEST_GRID = 'かぶり|らくがき;かぶり|らくがき'
 $out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $grpDir '20260802-かぶり.clip')) 'organize: first duplicate moved'
-Assert (Test-Path -LiteralPath (Join-Path $wipDir 'jjj.clip')) 'organize: second duplicate stays'
+Assert (Test-Path -LiteralPath (Join-Path $grpDir '20260802-かぶり.clip')) 'collision-2: first of two same-name rows moved'
+Assert (Test-Path -LiteralPath (Join-Path $wipDir 'jjj.clip')) 'collision-2: second same-name row stays in wip'
+Assert ($out.Contains('もうあります')) 'collision-2: same-run duplicate message'
 Remove-Item -LiteralPath (Join-Path $wipDir 'jjj.clip') -Force
 
 # 確認で「いいえ」→ 何も変更しない
