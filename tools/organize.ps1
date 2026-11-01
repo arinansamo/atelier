@@ -19,8 +19,16 @@ function Get-GenrePaths {
     return $list
 }
 
+# グループ欄の文字列を段の配列に正す。\ または / 区切りで入れ子（例: 版権\グループ名）。
+# IMEで入りがちな全角の＼／￥や¥も区切りとして読み替え、各段の前後の空白と末尾のドットは落とす
+function Get-GenreSegments {
+    param([string]$Text)
+    return @(($Text -replace '[/／＼￥¥]', '\') -split '\\' |
+        ForEach-Object { $_.Trim().TrimEnd('.', ' ') } | Where-Object { $_ -ne '' })
+}
+
 # 全件を1枚の表で確認・編集するダイアログ。
-# 戻り値: キャンセル時は $null、OK時は各行の { Use, Title, Genre } の配列（入力順）
+# 戻り値: キャンセル時は $null、OK時は各行の { Use, Title, Genre, Series } の配列（入力順）
 function Show-OrganizeDialog {
     param([object[]]$Items, [string[]]$GenreList)
 
@@ -31,7 +39,7 @@ function Show-OrganizeDialog {
     $form.MinimizeBox = $false
     $form.StartPosition = 'CenterScreen'
     $form.TopMost = $true
-    $form.ClientSize = New-Object System.Drawing.Size(640, 395)
+    $form.ClientSize = New-Object System.Drawing.Size(700, 410)
     $form.Font = New-Object System.Drawing.Font('Meiryo UI', 9.5)
 
     $headLabel = New-Object System.Windows.Forms.Label
@@ -55,11 +63,18 @@ function Show-OrganizeDialog {
     $genreHead.Font = New-Object System.Drawing.Font('Meiryo UI', 8.25)
     $genreHead.ForeColor = [System.Drawing.SystemColors]::GrayText
     $form.Controls.Add($genreHead)
+    $seriesHead = New-Object System.Windows.Forms.Label
+    $seriesHead.Text = 'シリーズ'
+    $seriesHead.Location = New-Object System.Drawing.Point(597, 40)
+    $seriesHead.AutoSize = $true
+    $seriesHead.Font = New-Object System.Drawing.Font('Meiryo UI', 8.25)
+    $seriesHead.ForeColor = [System.Drawing.SystemColors]::GrayText
+    $form.Controls.Add($seriesHead)
 
     # 行ごとに本物の部品を並べる。DataGridView のセル芸はイベント頼みで壊れやすいため使わない
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Location = New-Object System.Drawing.Point(15, 58)
-    $panel.Size = New-Object System.Drawing.Size(610, 252)
+    $panel.Size = New-Object System.Drawing.Size(670, 252)
     $panel.AutoScroll = $true
     $panel.BorderStyle = 'FixedSingle'
     $panel.BackColor = [System.Drawing.SystemColors]::Window
@@ -67,6 +82,7 @@ function Show-OrganizeDialog {
     $checkBoxes = @()
     $titleBoxes = @()
     $genreBoxes = @()
+    $seriesBoxes = @()
     for ($i = 0; $i -lt $Items.Count; $i++) {
         $y = 8 + $i * 32
 
@@ -102,28 +118,37 @@ function Show-OrganizeDialog {
         if ($GenreList.Count -gt 0) { $co.Items.AddRange($GenreList) }
         $panel.Controls.Add($co)
         $genreBoxes += $co
+
+        # シリーズ: チェックを入れると、OK のあとでグループの最後の段に完成日が付く（OK 時に読むだけ。イベントは使わない）
+        $sb = New-Object System.Windows.Forms.CheckBox
+        $sb.Location = New-Object System.Drawing.Point(606, ($y + 2))
+        $sb.Size = New-Object System.Drawing.Size(18, 18)
+        $sb.Checked = $false
+        $panel.Controls.Add($sb)
+        $seriesBoxes += $sb
     }
     $form.Controls.Add($panel)
 
     $hintLabel = New-Object System.Windows.Forms.Label
-    $hintLabel.Text = '＼で区切るとグループの中にグループを作れます（例: 版権＼グループ名）'
-    $hintLabel.Location = New-Object System.Drawing.Point(15, 320)
+    $hintLabel.Text = '＼で区切るとグループの中にグループを作れます（例: 版権＼グループ名）' + [Environment]::NewLine +
+        '「シリーズ」にチェックを入れると、グループの最後の段に完成日が付きます（例: うみ → 2026-10-25-うみ）'
+    $hintLabel.Location = New-Object System.Drawing.Point(15, 318)
     $hintLabel.AutoSize = $false
-    $hintLabel.Size = New-Object System.Drawing.Size(610, 18)
+    $hintLabel.Size = New-Object System.Drawing.Size(670, 32)
     $hintLabel.Font = New-Object System.Drawing.Font('Meiryo UI', 8.25)
     $hintLabel.ForeColor = [System.Drawing.SystemColors]::GrayText
     $form.Controls.Add($hintLabel)
 
     $okButton = New-Object System.Windows.Forms.Button
     $okButton.Text = 'OK'
-    $okButton.Location = New-Object System.Drawing.Point(445, 350)
+    $okButton.Location = New-Object System.Drawing.Point(505, 365)
     $okButton.Size = New-Object System.Drawing.Size(85, 30)
     $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $form.Controls.Add($okButton)
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = 'キャンセル'
-    $cancelButton.Location = New-Object System.Drawing.Point(538, 350)
+    $cancelButton.Location = New-Object System.Drawing.Point(598, 365)
     $cancelButton.Size = New-Object System.Drawing.Size(87, 30)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($cancelButton)
@@ -136,9 +161,10 @@ function Show-OrganizeDialog {
     $answers = @()
     for ($i = 0; $i -lt $Items.Count; $i++) {
         $answers += [pscustomobject]@{
-            Use   = $checkBoxes[$i].Checked
-            Title = [string]$titleBoxes[$i].Text
-            Genre = [string]$genreBoxes[$i].Text
+            Use    = $checkBoxes[$i].Checked
+            Title  = [string]$titleBoxes[$i].Text
+            Genre  = [string]$genreBoxes[$i].Text
+            Series = $seriesBoxes[$i].Checked
         }
     }
     return ,$answers
@@ -216,6 +242,19 @@ try {
     $skipped = 0
     $left = 0
 
+    # シリーズフォルダの日付は、同じ実行で同じシリーズに入れる行の中で一番早い完成日に揃える
+    # （連作をまとめて整理したとき、行の順番で日付が変わらないように）
+    $seriesDates = @{}
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $answer = $answers[$i]
+        if (-not ($answer.Use -and $answer.Series)) { continue }
+        $segs = @(Get-GenreSegments $answer.Genre)
+        if ($segs.Count -eq 0 -or $segs[-1] -match '^\d{4}-\d{2}-\d{2}-.+') { continue }
+        $key = ($segs -join '\').ToLowerInvariant()
+        $date = $items[$i].Clip.LastWriteTime
+        if (-not $seriesDates.ContainsKey($key) -or $date -lt $seriesDates[$key]) { $seriesDates[$key] = $date }
+    }
+
     for ($i = 0; $i -lt $items.Count; $i++) {
         $clip = $items[$i].Clip
         $answer = $answers[$i]
@@ -228,10 +267,7 @@ try {
 
         # 末尾のドット・空白はフォルダ名に使えないため落とす
         $title = $answer.Title.Trim().TrimEnd('.', ' ')
-        # グループは \ または / 区切りで入れ子にできる（例: 版権\グループ名）
-        # IMEで入りがちな全角の＼／￥や¥も区切りとして読み替える
-        $genreSegments = @(($answer.Genre -replace '[/／＼￥¥]', '\') -split '\\' |
-            ForEach-Object { $_.Trim().TrimEnd('.', ' ') } | Where-Object { $_ -ne '' })
+        $genreSegments = @(Get-GenreSegments $answer.Genre)
 
         if ($title -eq '') {
             Write-Host "  スキップ: $($clip.Name)（タイトルが空です）"
@@ -257,6 +293,31 @@ try {
             Write-Host "  スキップ: $($clip.Name)（8桁の数字で始まるグループ名は作品の名前と紛らわしいため使えません）"
             $skipped++
             continue
+        }
+
+        # シリーズ: グループの最後の段に完成日を付けて「yyyy-MM-dd-名前」のシリーズフォルダにする。
+        # 最後の段がすでに日付付き（一覧から既存のシリーズを選んだ）なら、そのまま使う
+        if ($answer.Series -and -not ($genreSegments[-1] -match '^\d{4}-\d{2}-\d{2}-.+')) {
+            $seriesName = $genreSegments[-1]
+            $parentSegments = @($genreSegments | Select-Object -First ($genreSegments.Count - 1))
+            $seriesDate = $seriesDates[($genreSegments -join '\').ToLowerInvariant()]
+            $seriesFolder = $seriesDate.ToString('yyyy-MM-dd') + '-' + $seriesName
+
+            # 同じ親に、同じ名前で日付だけ違うシリーズが既にあるなら、新しく作らず案内する（当て推量で合流はしない）
+            $parentDir = Join-Path $root 'works'
+            if ($parentSegments.Count -gt 0) { $parentDir = Join-Path $parentDir ($parentSegments -join '\') }
+            $twin = $null
+            if (Test-Path -LiteralPath $parentDir -PathType Container) {
+                $pattern = '^\d{4}-\d{2}-\d{2}-' + [regex]::Escape($seriesName) + '$'
+                $twin = @(Get-ChildItem -LiteralPath $parentDir -Directory |
+                    Where-Object { $_.Name -match $pattern -and $_.Name -ne $seriesFolder } | Sort-Object Name) | Select-Object -First 1
+            }
+            if ($twin) {
+                Write-Host "  スキップ: $($clip.Name)（同じ名前のシリーズ $($twin.Name) が既にあります。続きはグループの一覧から選んでください）"
+                $skipped++
+                continue
+            }
+            $genreSegments = $parentSegments + @($seriesFolder)
         }
         $genre = $genreSegments -join '\'
 
