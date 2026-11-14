@@ -2,8 +2,8 @@
 # ダイアログを環境変数駆動の差し替えに置換した tools\*.ps1 のコピーを、
 # 一時領域に組んだ偽の絵の置き場に対して実行し、結果を検分する。
 #
-# GRID書式（organize用）: 行ごとに ';' 区切り。各行 'タイトル|グループ|S'。
-#   '~'=タイトル初期値のまま採用、'!'=チェックを入れない、3つ目の 'S'=シリーズにチェック（省略可）
+# GRID書式（organize用）: 行ごとに ';' 区切り。各行 'タイトル|グループ'。
+#   '~'=タイトル初期値のまま採用、'!'=チェックを入れない
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -63,7 +63,6 @@ if ($env:ATELIER_TEST_CANCEL -eq '1') { return $null }
             if ($parts[0] -ne '~') { $titleBoxes[$ti].Text = $parts[0] }
         }
         if ($parts.Count -gt 1) { $genreBoxes[$ti].Text = $parts[1] }
-        if ($parts.Count -gt 2 -and $parts[2] -eq 'S') { $seriesBoxes[$ti].Checked = $true }
     }
 '@
 $anchor2 = '$result = [System.Windows.Forms.MessageBox]::Show($owner, $Message, ''atelier'', ''YesNo'', ''Question'')'
@@ -150,71 +149,6 @@ New-TestFile (Join-Path $wipDir 'mmm.clip') ([datetime]'2026-08-06 09:00')
 $env:ATELIER_TEST_GRID = '~|版権＼つき'
 $out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
 Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\版権\つき\20260806-mmm.clip')) 'organize: fullwidth separator normalized'
-
-# ---- 3.5. organize: シリーズフォルダ ----
-# 新しいシリーズ: グループの最後の段に完成日が付き、作品はその中へ直接置かれる
-New-TestFile (Join-Path $wipDir 'umi1.clip') ([datetime]'2026-10-25 20:00')
-$env:ATELIER_TEST_GRID = 'うみ-01|OC\Cyan\うみ|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-$seriesDir = Join-Path $rootDir 'works\OC\Cyan\2026-10-25-うみ'
-Assert (Test-Path -LiteralPath (Join-Path $seriesDir '20261025-うみ-01.clip')) 'series: new series folder gets the date and the clip'
-Assert (-not (Test-Path -LiteralPath (Join-Path $rootDir 'works\OC\Cyan\うみ'))) 'series: no undated folder created'
-Assert ($out.Contains('OC\Cyan\2026-10-25-うみ\20261025-うみ-01.clip')) 'series: expanded destination shown in plan'
-
-# 一覧から既存のシリーズを選び、チェックも入れたまま → 日付を二重に付けず、既存のフォルダへ
-New-TestFile (Join-Path $wipDir 'umi2.clip') ([datetime]'2026-11-01 20:00')
-$env:ATELIER_TEST_GRID = 'うみ-02|OC\Cyan\2026-10-25-うみ|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $seriesDir '20261101-うみ-02.clip')) 'series: existing dated folder reused when picked from list'
-Assert (@(Get-ChildItem -LiteralPath (Join-Path $rootDir 'works\OC\Cyan') -Directory).Count -eq 1) 'series: no second folder for the same series'
-
-# 同じ名前のシリーズが別の日付で既にある → スキップして案内。新しいフォルダは作らない
-New-TestFile (Join-Path $wipDir 'umi3.clip') ([datetime]'2026-11-02 20:00')
-$env:ATELIER_TEST_GRID = 'うみ-03|OC\Cyan\うみ|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $wipDir 'umi3.clip')) 'series: same-name series with another date stays in wip'
-Assert ($out.Contains('同じ名前のシリーズ 2026-10-25-うみ が既にあります')) 'series: twin message names the existing folder'
-Assert (-not (Test-Path -LiteralPath (Join-Path $rootDir 'works\OC\Cyan\2026-11-02-うみ'))) 'series: twin does not create another dated folder'
-Remove-Item -LiteralPath (Join-Path $wipDir 'umi3.clip') -Force
-
-# 同じ実行で同じシリーズに複数行（先の行のほうが完成日が遅い）→ 一番早い日付でフォルダ1つ
-New-TestFile (Join-Path $wipDir 'sora-a.clip') ([datetime]'2026-09-12 10:00')
-New-TestFile (Join-Path $wipDir 'sora-b.clip') ([datetime]'2026-09-10 10:00')
-$env:ATELIER_TEST_GRID = '~|OC\Cyan\そら|S;~|OC\Cyan\そら|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-$soraDir = Join-Path $rootDir 'works\OC\Cyan\2026-09-10-そら'
-Assert (Test-Path -LiteralPath (Join-Path $soraDir '20260912-sora-a.clip')) 'series: later-dated row joins the earliest-dated folder'
-Assert (Test-Path -LiteralPath (Join-Path $soraDir '20260910-sora-b.clip')) 'series: earliest-dated row sets the folder date'
-Assert (-not (Test-Path -LiteralPath (Join-Path $rootDir 'works\OC\Cyan\2026-09-12-そら'))) 'series: no per-row dated folders'
-
-# 行儀の悪い入力: 日付を自分で yyyyMMdd 形式で打ってからチェック → 従来どおり「紛らわしい」で拒否
-New-TestFile (Join-Path $wipDir 'nnn.clip') ([datetime]'2026-10-01 10:00')
-$env:ATELIER_TEST_GRID = '~|OC\20261001-ほし|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert ($out.Contains('紛らわしい')) 'series: 8-digit series name still rejected'
-Assert (Test-Path -LiteralPath (Join-Path $wipDir 'nnn.clip')) 'series: rejected row stays in wip'
-# 全角区切り・末尾の区切り付きでも、最後の段がシリーズ名になる
-$env:ATELIER_TEST_GRID = '~|OC／ほし／|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\OC\2026-10-01-ほし\20261001-nnn.clip')) 'series: fullwidth and trailing separators normalized before dating'
-# グループ欄が空でチェックだけ → 従来どおり「グループが空」
-New-TestFile (Join-Path $wipDir 'ooo.clip')
-$env:ATELIER_TEST_GRID = '~||S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert ($out.Contains('グループが空')) 'series: empty group with series check skipped as empty group'
-Remove-Item -LiteralPath (Join-Path $wipDir 'ooo.clip') -Force
-# 親なし（works 直下のシリーズ）
-New-TestFile (Join-Path $wipDir 'ppp.clip') ([datetime]'2026-10-02 10:00')
-$env:ATELIER_TEST_GRID = '~|まつり|S'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\2026-10-02-まつり\20261002-ppp.clip')) 'series: series folder directly under works'
-# チェックなしなら、同じ入力でも従来どおりの日付なしグループ
-New-TestFile (Join-Path $wipDir 'qqq.clip') ([datetime]'2026-10-03 10:00')
-$env:ATELIER_TEST_GRID = '~|OC\Cyan\ただのグループ'
-$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
-Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\OC\Cyan\ただのグループ\20261003-qqq.clip')) 'series: unchecked row makes a plain undated group'
-# シリーズの作品にも画像を添えておく（後段の check-live で、シリーズフォルダの中が普通の作品として扱われることを見る）
-New-TestFile (Join-Path $seriesDir '20261025-うみ-01.png')
 
 # ---- 4. organize: スキップ各種 ----
 # ① 行き先に同名の作品が既にある → その件はスキップ、既存の中身は無傷
@@ -390,8 +324,6 @@ $out = (& (Join-Path $liveTool 'check.ps1') -ToolDir $liveTool 6>&1 | Out-String
 Assert ($out.Contains('[書き出し忘れ]') -and $out.Contains('らくがき\20260703-aaa.clip')) 'check-live: image-less works flagged'
 Assert (-not $out.Contains('原本が見つかりません')) 'check-live: no false missing-original findings'
 Assert (-not $out.Contains('名前が規則と違います')) 'check-live: organize output passes name rules'
-Assert (-not $out.Contains('うみ-01')) 'check-live: paired work inside a series folder is clean'
-Assert ($out.Contains('2026-10-25-うみ\20261101-うみ-02.clip')) 'check-live: image-less work inside a series folder is still flagged'
 
 # ---- 結果 ----
 Write-Output ''
