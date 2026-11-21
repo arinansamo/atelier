@@ -315,15 +315,64 @@ Assert ($out.Contains('[その他のファイル]') -and $out.Contains('よみ�
 Assert (-not $out.Contains('desktop.ini')) 'check-strict: windows droppings still ignored'
 Assert ($out.Contains('厳密点検モード')) 'check-strict: mode announced'
 
+# ---- 6.5. check: .atelierignore で点検から外す ----
+# 行儀の悪い中身を持つ練習棚。まず対象外にしない状態で、全部が指摘されることを確かめる
+New-TestFile (Join-Path $checkRoot 'works\練習\だれか\20260901-もしゃ.clip')   # 画像なし → 書き出し忘れ
+New-TestFile (Join-Path $checkRoot 'works\練習\だれか\さんこう.png')            # 相方なし → 原本消失
+New-TestFile (Join-Path $checkRoot 'works\練習\だれか\らくがき.clip')           # 日付なし・画像なし → 名前＋書き出し忘れ
+New-TestFile (Join-Path $checkRoot 'works\練習\だれか\めも.txt')               # 厳密: その他のファイル
+New-TestFile (Join-Path $checkRoot 'works\練習\20260303-だぶり.clip')         # 厳密: 既存の2件と同名
+New-TestFile (Join-Path $checkRoot 'works\練習\20260303-だぶり.png')
+[void][System.IO.Directory]::CreateDirectory((Join-Path $checkRoot 'works\練習\から'))  # 厳密: 空のグループ
+New-TestFile (Join-Path $checkRoot 'works\Scraps\20260902-てすと.clip')          # 画像なし → 書き出し忘れ（大文字小文字の検証用）
+$out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool 6>&1 | Out-String)
+Assert ($out.Contains('13件の問題が見つかりました') -and $out.Contains('練習\だれか\さんこう.png') -and $out.Contains('Scraps\20260902-てすと.clip')) 'ignore: without .atelierignore the practice shelves are flagged (8+5)'
+
+# 同梱の見本をそのままコピーして使った状態（コメントだけ）→ 何も変わらず、対象外の表示も出ない
+Copy-Item -LiteralPath (Join-Path $repo '.atelierignore.example') -Destination (Join-Path $checkTool '.atelierignore')
+$out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool 6>&1 | Out-String)
+Assert ($out.Contains('13件の問題が見つかりました') -and -not $out.Contains('対象外')) 'ignore: shipped example copied as-is has no active entries'
+
+# 空のファイルでも落ちない
+[System.IO.File]::WriteAllText((Join-Path $checkTool '.atelierignore'), '')
+$out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool 6>&1 | Out-String)
+Assert ($out.Contains('13件の問題が見つかりました') -and -not $out.Contains('エラー')) 'ignore: empty file changes nothing'
+
+# コメント・区切りの揺れ（/ と全角、末尾の区切り）・大文字小文字の違い・存在しない行を混ぜる
+$ignoreText = "# 模写の練習は点検しない`r`n練習/`r`n`r`nscraps`r`n＼ないフォルダ＼`r`n"
+[System.IO.File]::WriteAllText((Join-Path $checkTool '.atelierignore'), $ignoreText, $utf8Bom)
+$out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool 6>&1 | Out-String)
+Assert ($out.Contains('対象外: 練習') -and -not $out.Contains('対象外: 練習/')) 'ignore: entry announced with normalized separators'
+Assert ($out.Contains('対象外: ないフォルダ（見つかりません）')) 'ignore: nonexistent entry noted'
+Assert ($out.Contains('8件の問題が見つかりました')) 'ignore: count back to 8 (nonexistent entry not counted)'
+Assert (-not $out.Contains('練習\')) 'ignore: nothing inside the ignored folder reported'
+Assert (-not $out.Contains('Scraps\')) 'ignore: folder matched regardless of letter case'
+Assert ($out.Contains('ゆめアニメ\20260815-夏の絵.clip')) 'ignore: siblings still checked'
+$out = (& (Join-Path $checkTool 'check.ps1') -ToolDir $checkTool -Strict 6>&1 | Out-String)
+Assert ($out.Contains('13件の問題が見つかりました')) 'ignore-strict: count back to 13'
+Assert (-not $out.Contains('練習\')) 'ignore-strict: inventory and duplicates skip the ignored folder too'
+Assert ($out.Contains('対象外: 練習')) 'ignore-strict: entries announced in strict mode too'
+
+# organize は .atelierignore に左右されない。対象外のグループへもふだんどおり整理できる
+# （BOM なしの UTF-8 = メモ帳の既定で書いたものも読めることを、下の check-live で兼ねて確かめる）
+[System.IO.File]::WriteAllText((Join-Path $toolDir '.atelierignore'), "練習`r`n")
+New-TestFile (Join-Path $wipDir 'ppp.clip') ([datetime]'2026-09-01 10:00')
+$env:ATELIER_TEST_GRID = '~|練習\だれか'
+$out = (& $organizeScript -ToolDir $toolDir 6>&1 | Out-String)
+Assert (Test-Path -LiteralPath (Join-Path $rootDir 'works\練習\だれか\20260901-ppp.clip')) 'ignore: organize still files into an ignored group'
+
 # organize が作った実物を check にかける
 $liveTool = Join-Path $base 'tool-live'
 [void][System.IO.Directory]::CreateDirectory($liveTool)
 Copy-Item -LiteralPath $checkScript -Destination (Join-Path $liveTool 'check.ps1')
 [System.IO.File]::WriteAllText((Join-Path $liveTool 'root.txt'), $rootDir, $utf8Bom)
+Copy-Item -LiteralPath (Join-Path $toolDir '.atelierignore') -Destination (Join-Path $liveTool '.atelierignore')
 $out = (& (Join-Path $liveTool 'check.ps1') -ToolDir $liveTool 6>&1 | Out-String)
 Assert ($out.Contains('[書き出し忘れ]') -and $out.Contains('らくがき\20260703-aaa.clip')) 'check-live: image-less works flagged'
 Assert (-not $out.Contains('原本が見つかりません')) 'check-live: no false missing-original findings'
 Assert (-not $out.Contains('名前が規則と違います')) 'check-live: organize output passes name rules'
+Assert ($out.Contains('対象外: 練習')) 'check-live: BOM-less .atelierignore is read'
+Assert (-not $out.Contains('ppp.clip')) 'check-live: clip inside ignored group not flagged'
 
 # ---- 結果 ----
 Write-Output ''

@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $findings = New-Object 'System.Collections.Generic.List[object]'
 $imageExts = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.psd', '.tif', '.tiff')
 $ignoreNames = @('desktop.ini', 'thumbs.db')
+$ignoreDirs = @{}    # .atelierignore に書かれた、点検しないフォルダ（小文字キー → 書かれたままの表記）
 $workNames = @{}
 
 function Add-Finding {
@@ -80,6 +81,8 @@ function Invoke-GroupScan {
     # サブフォルダはすべてグループとして潜る
     foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory | Sort-Object Name)) {
         $childRel = if ($Rel -eq '') { $d.Name } else { "$Rel\$($d.Name)" }
+        # .atelierignore に書かれたフォルダは、中身を一切見ない（厳密モードの棚卸しも含めて）
+        if ($ignoreDirs.ContainsKey($childRel.ToLowerInvariant())) { continue }
         if ($Depth -lt 6) {
             # 厳密モードのみ: 中身のないグループフォルダを棚卸しする
             if ($Strict -and @(Get-ChildItem -LiteralPath $d.FullName).Count -eq 0) {
@@ -115,6 +118,28 @@ try {
     }
 
     if ($Strict) { Write-Host '厳密点検モードで調べます。' -ForegroundColor Cyan }
+
+    # 点検しないフォルダを .atelierignore（root.txt の隣）から読む。
+    # 1行に1フォルダ、works の中の相対パス（例: 練習、版権\ラフ）。# 始まりの行と空行は無視。
+    # 区切りは \ / 全角のどれでもよく、大文字小文字は区別しない（Windows のフォルダ名と同じ）
+    $ignoreFile = Join-Path $ToolDir '.atelierignore'
+    if (Test-Path -LiteralPath $ignoreFile -PathType Leaf) {
+        foreach ($raw in @(Get-Content -LiteralPath $ignoreFile -Encoding UTF8)) {
+            $text = ([string]$raw).Trim()
+            if ($text -eq '' -or $text.StartsWith('#')) { continue }
+            $segs = @(($text -replace '[/／＼￥¥]', '\') -split '\\' |
+                ForEach-Object { $_.Trim().TrimEnd('.', ' ') } | Where-Object { $_ -ne '' })
+            if ($segs.Count -eq 0) { continue }
+            $relPath = $segs -join '\'
+            $ignoreDirs[$relPath.ToLowerInvariant()] = $relPath
+            # 打ち間違いに気づけるよう、実在しない行にはその旨を添える（異常としては数えない）
+            $exists = $false
+            try { $exists = Test-Path -LiteralPath (Join-Path $worksDir $relPath) -PathType Container } catch { $exists = $false }
+            $note = if ($exists) { '' } else { '（見つかりません）' }
+            Write-Host "対象外: $relPath$note"
+        }
+    }
+
     Invoke-GroupScan -Dir $worksDir -Rel '' -Depth 0
 
     # 厳密モードのみ: 同じ名前の作品が複数の場所にあれば棚卸しする

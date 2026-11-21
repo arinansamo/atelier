@@ -1,5 +1,6 @@
-# 個人の設定
+# 個人の設定（見本は .atelierignore.example として追跡する）
 root.txt
+.atelierignore
 
 # 同じフォルダを絵の置き場にした場合の保険
 wip/
